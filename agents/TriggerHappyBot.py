@@ -2,7 +2,7 @@ from ClueBasics.Player import Player
 import random
 
 class TriggerHappyBot(Player):
-    
+
     def chooseSuggestion(self):
         suspect = random.choice(self.possibleSuspects)
         weapon = random.choice(self.possibleWeapons)
@@ -17,12 +17,16 @@ class TriggerHappyBot(Player):
         owner, card = self.game.makeSuggestion(self, perp, weapon, room)
 
         if owner is None:
-            print(f"No one disproved. {self.name} might try an accusation!")
+            if self.game.verbose:
+                print(f"No one disproved. {self.name} might try an accusation!")
             if self.makeAccusation(perp, weapon, room):
-                print(f"{self.name} WINS! The solution was correct. ")
+                if self.game.verbose:
+                    print(f"{self.name} WINS! The solution was correct. ")
                 return self.name
             else:
-                print(f"{self.name} made a wrong accusation and is out.")
+                if self.game.verbose:
+                    print(f"{self.name} made a wrong accusation and is out.")
                 self.inGame = False
         else:
-            print(f"{owner.name} showed a card.")
+            if self.game.verbose:
+                print(f"{owner.name} showed a card.")

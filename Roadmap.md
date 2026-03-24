@@ -1,132 +1,188 @@
-Phase 1: Core Game Simulation
-🎯 Goal: Build a functional virtual version of Clue that bots can play
+# ClueBot Roadmap
 
-1. Game Setup
+---
 
-    Implement GameRules class
+## Phase 1: Core Game Simulation ✅
 
-    Define Player class (can be bot or human)
+**Goal:** Build a functional virtual Clue that bots can play.
 
-    Randomly select solution cards (1 suspect, 1 weapon, 1 room)
+- Implement GameRules class
+- Define Player abstract base class
+- Randomly select solution cards, shuffle and deal remainder
+- Turn-based game loop: suggestion → response → accusation
+- Track card visibility per player
+- Suggestion log: who suggested what, who responded, what was shown
+- Correct accusation → win condition
 
-    Shuffle and deal the rest to players
+---
 
-    Game Loop
+## Phase 2: Information Tracking & Belief Modeling ✅
 
-        Turn-based structure
+**Goal:** Give bots memory and reasoning capabilities.
 
-        On each turn, allow:
+- Per-player suggestion history (public log with visibility rules)
+- Card likelihood matrix: P(owner has card) for every (owner, card) pair
+- Backward inference: deduce shown card when only one possibility remains
+- Cascading deductions: when a card is confirmed in solution, eliminate others in category
 
-        Suggestion (suspect, weapon, room)
+---
 
-    Response (next player shows one matching card if any)
+## Phase 3: Bot Architecture 🔄
 
-    Card Visibility
+**Goal:** Multiple bot strategies ranging from naive to optimal, plus adversarial bots.
 
-        Track cards in each player’s hand
+### Completed
 
-        Track which card is shown to which player
+- TriggerHappyBot — accuses whenever no one responds to a suggestion
+- EliminationBot — crosses off cards through direct observation only
+- HeuristicsBot — Bayesian belief matrix + entropy-based suggestion + solution card tracking
 
-        Add a suggestion log: who suggested what, who showed what (or didn’t)
+### HeuristicsBot: Strategy Research Track
 
-    Game End Condition
+HeuristicsBot is not just a training opponent — it is an active research track into
+what the optimal Clue strategy looks like. The hypothesis is that entropy-based
+suggestion selection (highest solution probability, tiebroken by highest entropy)
+is near-optimal. CFR will be used to test this.
 
-        Correct accusation → win
+Remaining:
 
+- [ ] BluffBot — suggests own cards to mislead opponents, actively reinforces mistaken beliefs
+- [ ] MirrorBot — mirrors recent opponent suggestions to obscure its own knowledge state
+- [ ] PolicySwitchingBot — switches strategies based on inferred game phase
 
+---
 
-🔍 Phase 2: Information Tracking & Belief Modeling
-🎯 Goal: Give bots memory and reasoning capabilities
+## Phase 4: Reinforcement Learning Integration 🔄
 
-2. History
+**Goal:** Train an RL agent that discovers strategy from game outcomes rather than
+inheriting it from a heuristic.
 
-        Log every suggestion (who suggested, what cards, who responded, what was shown)
+### Architecture
 
-        Each player gets their own copy of visible history
+The RL agent is backed by **EliminationBot** logic for belief tracking. This is a
+deliberate choice: EliminationBot's belief matrix is grounded in direct observation
+only, with no strategy baked in. This gives the RL agent room to discover suggestion
+strategy rather than fighting against an already-optimal heuristic.
 
-___________________________________________________________________________________DONE____________________________________________________________
+**HeuristicsBot is not used as RL backing.** It is a separate benchmark.
 
-    Card Likelihood Matrix
+The DQN network has a **shared trunk** with **three output heads**:
 
-        For each player and each card, store a probability they have it:
+#### Suggestion Head**
 
-    Responses (or lack thereof)
+- Q-values over all (suspect, weapon, room) combinations
+- Guided exploration: epsilon-random weighted toward high solution-probability
+  actions, not pure uniform random. Keeps exploration in productive regions.
+- The head may converge to something like HeuristicsBot's strategy — that is a
+  valid and interesting result, not a failure.
 
-🎓 Phase 3: Bot Architecture
-🎯 Goal: Add logic-based and learning-based bots
+#### Reveal Head**
 
- 1) TriggerHappyBot - Accuse when no one shows
- 2) EliminationBot - Accuse when its can cross off through its suggestions
- 3) HeuristicsBot - Suggest based on a belief matrix, tracking cards shown indirectly, setting people that dont have certain cards to 0, and when a card is shown, which of the three guessed - probabilities 
-        Inference
-        Uncertain-first strategy?
-        
-4) Bluff-based - Throws off on purpose by bluffing own cards and tries to actively reinforce others' mistaken beliefs
-5) MirroBot - Mirrors others suggestions to confuse ever so often
-6) Policy switching bot 
-Learning Bot
+- Q-values over MAX_HAND_SIZE card slots
+- Decides which matching card to show when forced to respond to an opponent suggestion
+- Trained with detached trunk to avoid interfering with suggestion head features
+- Retrospective reward assignment: reveal transitions accumulate during episode,
+  terminal reward assigned after game ends
 
-Wrap game logic in an RL-compatible interface:
+**Accusation Timing Head** *(new)*
 
-get_state()
+- Binary output: accuse now vs wait
+- Replaces the hardcoded certainty-threshold policy
+- Input includes opponent progress proxies from the public log:
+  - Turn count
+  - Number of opponents still in game
+  - Per-opponent unanswered suggestion count (proxy for how close they are)
+  - Your own solution probabilities and possibleSuspects/Weapons/Rooms lengths
+- Does not require opponent belief matrices — those are private and intractable.
+  Public log proxies are sufficient.
+- This is the novel contribution: accusation as a learned policy under uncertainty
+  rather than a deterministic threshold.
 
-get_legal_actions()
+### State Representation
 
-step(action)
+```text
+[hand_encoding | elimination_belief_matrix | compact_suggestion_history | opponent_proxies]
+```
 
-get_reward()
+- hand_encoding: binary over action space
+- elimination_belief_matrix: from EliminationBot (direct observation only)
+- compact_suggestion_history: last N suggestions as 12 dense floats each
+  (solution probs of suggested cards + normalized player/responder flags)
+  rather than one-hot over action space (massive dimensionality reduction)
+- opponent_proxies: turn count, opponents remaining, unanswered suggestion counts
 
-🧠 Phase 4: Reinforcement Learning Integration
-🎯 Goal: Train bots to improve strategy over time
+### Reward Signals
 
-Define State Representation
+| Signal              | Value  | When                         |
+|---------------------|--------|------------------------------|
+| Win                 | +1.0   | Correct accusation           |
+| Wrong accusation    | -1.0   | Incorrect accusation         |
+| Bot wins            | -1.0   | Any opponent wins first      |
+| Info gain (shaped)  | ±small | Non-terminal steps only      |
 
-Your hand
+Terminal rewards are never modified by shaping.
 
-Cards you've seen
+### CompletedCode
 
-Belief matrix
+- [x] ClueEnv Gym-style wrapper
+- [x] get_state(), get_legal_actions(), step()
+- [x] Dual-head DQN (suggestion + reveal)
+- [x] Training loop with experience replay, Double DQN, Huber loss
+- [x] Per-episode epsilon decay
+- [x] Reward shaping (information gain, terminal cleanliness)
+- [x] Retrospective reveal reward assignment
 
-Suggestion history
+### Remaining
 
-Turn number or phase
+- [ ] Swap RL backing from HeuristicsBot to EliminationBot
+- [ ] Guided exploration for suggestion head
+- [ ] Accusation timing head implementation
+- [ ] Compact suggestion history encoding
+- [ ] Opponent progress proxies in state
+- [ ] Evaluate against EliminationBot, HeuristicsBot, CFR baselines
 
-Define Action Space
+---
 
-Suggestions: all combinations of suspect/weapon/room
+## Phase 5: Game Theory & Advanced Inference
 
-Card Risk Levels - Sort cards by priority and reveal the ones that are less important or less visible
+**Goal:** CFR as a benchmark and opponent modeling.
 
-Opponent belief matrix - where do they think that card is
+### CFR Benchmark
 
-Bluffing (guess own cards in suggestion)
+Model Clue as an extensive-form game with imperfect information and implement
+vanilla CFR. Primary purpose: determine whether HeuristicsBot's entropy-based
+strategy is actually optimal or just approximately optimal. If CFR's suggestion
+selection matches HeuristicsBot's, the entropy approach is likely near-optimal.
+If CFR diverges, that divergence reveals something non-obvious about Clue strategy.
 
-Information masking - dont make conclusions obvious (related to other's beliefs and suggestion log  )
+### Opponent Modeling
 
-Define Reward Signal
+- Track per-opponent tendencies from the public log (bluffing frequency,
+  suggestion reuse patterns, aggression toward early accusation)
+- Feed tendency features into accusation timing head as additional input
+- Long-term: use opponent models to inform suggestion selection (suggest cards
+  that exploit a known bluffing opponent's information leakage)
 
-Win = +1
+---
 
-Loss = 0 or -1
+## Phase 6: Deployment
 
-Bonus: Reward inference accuracy or information gain
+- Flask/FastAPI backend
+- Web frontend (play against bots)
+- Docker containerization
+- AWS deployment
+- (Optional) User authentication, game history, leaderboards
 
-Implement RL Agent
+---
 
-Start with DQN, PPO, or policy gradient
+## Bot Hierarchy Summary
 
-Train via self-play
-
-♟ Phase 5: Game Theory & Advanced Inference
-🎯 Goal: Add strategic, opponent-aware intelligence
-
-Counterfactual Regret Minimization (CFR)
-
-Model Clue as a multi-agent extensive-form game
-
-Implement CFR on top of simulator
-
-Track tendencies: Do they bluff? Reuse same suggestions?
-
-
-
+| Bot                | Belief Tracking     | Suggestion Strategy        | Role                        |
+|--------------------|--------------------|-----------------------------|------------------------------|
+| TriggerHappyBot    | None               | Random, accuse if no refute | Baseline / training fodder   |
+| EliminationBot     | Direct observation | Random                      | RL backing / weak baseline   |
+| HeuristicsBot      | Bayesian + cascade | Entropy-maximizing          | Strategy research benchmark  |
+| CFR Agent          | Full game tree     | Regret-minimizing           | Optimality benchmark         |
+| RL Agent           | EliminationBot     | Learned (3-head DQN)        | Primary research subject     |
+| BluffBot           | Bayesian           | Deceptive                   | Adversarial training opponent|
+| MirrorBot          | Bayesian           | Mimicry-based               | Adversarial training opponent|
